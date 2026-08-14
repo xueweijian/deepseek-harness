@@ -1,0 +1,27 @@
+# Settings for the runtime closure install; no workspace members.
+#
+# pnpm 11 reads only auth and registry settings from .npmrc; layout and peer
+# handling live here. The flat hoisted layout keeps runtime/node_modules a real
+# directory tree, which is what the installer ships as extraResources.
+nodeLinker: hoisted
+autoInstallPeers: true
+# Every dependency is exact-pinned through @deepseek-ai/dsh's locked version,
+# so pnpm's fresh-release age gate adds no protection here; disable it rather
+# than carry an auto-generated per-package exclusion list.
+minimumReleaseAge: 0
+# Upstream patches node-pty@1.1.0 (spawn-helper resolution for an embedded
+# runtime); pnpm 11 reads patches from this file, not package.json's pnpm field.
+patchedDependencies:
+  node-pty@1.1.0: patches/node-pty@1.1.0.patch
+# Same build-script review decisions as the upstream harness workspace:
+# node-pty (ConPTY/PTY native) and koffi (Windows durability) may build;
+# dsh-subprocess-local's reviewed postinstall restores the executable bit on
+# node-pty's macOS spawn helper. The remaining script-shipping transitive deps
+# carry no-op scripts and are denied.
+allowBuilds:
+  node-pty: true
+  koffi: true
+  '@deepseek-ai/dsh-subprocess-local': true
+  '@google/genai': false
+  protobufjs: false
+  node-addon-require-builtin: false

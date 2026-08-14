@@ -1,0 +1,4 @@
+dist-electron/
+dist/
+build/node-runtime/
+*.log

@@ -39,3 +39,4 @@ worktrees/
 .agents/worktrees/
 .typert-*/
 .mimosa/
+.zcode/

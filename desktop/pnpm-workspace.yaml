@@ -1,0 +1,12 @@
+# Settings for the standalone desktop shell project; no workspace members.
+# pnpm 11 reads only auth and registry settings from .npmrc; the layout and
+# build-script review live here.
+nodeLinker: hoisted
+# pnpm 11 blocks dependency build scripts until reviewed here; electron and
+# esbuild need theirs to place their platform binaries.
+allowBuilds:
+  electron: true
+  esbuild: true
+  # Squirrel.Windows packaging dependency; unused (nsis/zip targets), deny its
+  # scripts without failing the install.
+  electron-winstaller: false

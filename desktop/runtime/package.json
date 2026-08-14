@@ -1,0 +1,14 @@
+{
+  "name": "dsh-desktop-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Runtime closure shipped inside the DSH Desktop installer: the published dsh CLI and its dependency tree.",
+  "dependencies": {
+    "@deepseek-ai/dsh": "0.1.0-rc.6"
+  },
+  "pnpm": {
+    "patchedDependencies": {
+      "node-pty@1.1.0": "patches/node-pty@1.1.0.patch"
+    }
+  }
+}

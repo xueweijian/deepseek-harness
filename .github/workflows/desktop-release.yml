@@ -1,0 +1,138 @@
+# Build the standalone desktop shell for Windows (nsis + zip) and Linux
+# (AppImage + deb). A desktop-v* tag push builds both platforms and publishes:
+# electron-builder --publish always creates the GitHub release (releaseType:
+# release, so auto-update sees it) and uploads the artifacts. Pull requests and
+# master pushes touching desktop run the same build with --publish never as
+# validation.
+name: Release (Desktop)
+
+on:
+  push:
+    tags: ['desktop-v*']
+    branches: [master]
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/desktop-release.yml'
+  pull_request:
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/desktop-release.yml'
+
+# electron-builder creates the release and uploads artifacts through the
+# GH_TOKEN env var below. Pull request runs from forks get a read-only token
+# regardless of this setting.
+permissions:
+  contents: write
+
+env:
+  # The smoke test boots the dsh web server; keep it off the production
+  # telemetry endpoint.
+  DSH_TELEMETRY_DISABLED: '1'
+
+jobs:
+  windows:
+    name: Windows / nsis + zip
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: |
+            desktop/pnpm-lock.yaml
+            desktop/runtime/pnpm-lock.yaml
+
+      - name: Install desktop dependencies
+        run: pnpm --dir desktop install --frozen-lockfile
+
+      - name: Fetch bundled Node runtime
+        run: pnpm --dir desktop run fetch-node
+
+      - name: Install dsh runtime closure
+        run: pnpm --dir desktop run runtime:install
+
+      - name: Build electron main
+        run: pnpm --dir desktop run build:electron
+
+      - name: Smoke test (headless)
+        run: pnpm --dir desktop run smoke
+
+      - name: Package installers and publish
+        if: github.ref_type == 'tag' && startsWith(github.ref_name, 'desktop-v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm --dir desktop exec electron-builder --win nsis zip --publish always
+
+      - name: Package installers (validation)
+        if: github.ref_type != 'tag' || !startsWith(github.ref_name, 'desktop-v')
+        run: pnpm --dir desktop exec electron-builder --win nsis zip --publish never
+
+      - name: Smoke test the packaged sidecar
+        shell: bash
+        working-directory: desktop
+        env:
+          SMOKE_NODE: dist/win-unpacked/resources/node/node.exe
+          SMOKE_DSH_BIN: dist/win-unpacked/resources/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js
+        run: node scripts/smoke-sidecar.mjs
+
+  linux:
+    name: Linux / AppImage + deb
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # The windows job creates the GitHub release; publishing after it keeps
+    # the two jobs from racing to create the same v<version> release.
+    needs: windows
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: |
+            desktop/pnpm-lock.yaml
+            desktop/runtime/pnpm-lock.yaml
+
+      - name: Install desktop dependencies
+        run: pnpm --dir desktop install --frozen-lockfile
+
+      - name: Fetch bundled Node runtime
+        run: pnpm --dir desktop run fetch-node
+
+      - name: Install dsh runtime closure
+        run: pnpm --dir desktop run runtime:install
+
+      - name: Build electron main
+        run: pnpm --dir desktop run build:electron
+
+      - name: Smoke test (headless)
+        run: pnpm --dir desktop run smoke
+
+      - name: Package installers and publish
+        if: github.ref_type == 'tag' && startsWith(github.ref_name, 'desktop-v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm --dir desktop exec electron-builder --linux AppImage deb --publish always
+
+      - name: Package installers (validation)
+        if: github.ref_type != 'tag' || !startsWith(github.ref_name, 'desktop-v')
+        run: pnpm --dir desktop exec electron-builder --linux AppImage deb --publish never
+
+      - name: Smoke test the packaged sidecar
+        shell: bash
+        working-directory: desktop
+        env:
+          SMOKE_NODE: dist/linux-unpacked/resources/node/bin/node
+          SMOKE_DSH_BIN: dist/linux-unpacked/resources/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js
+        run: node scripts/smoke-sidecar.mjs

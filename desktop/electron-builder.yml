@@ -1,0 +1,32 @@
+appId: io.github.xueweijian.dsh-desktop
+productName: DSH Desktop
+directories:
+  output: dist
+files:
+  - dist-electron/**
+extraResources:
+  - from: build/node-runtime
+    to: node
+  - from: runtime/package.json
+    to: dsh/package.json
+  - from: runtime/node_modules
+    to: dsh/node_modules
+win:
+  icon: build/icon.ico
+  target:
+    - nsis
+    - zip
+linux:
+  icon: build/icon.png
+  category: Development
+  target:
+    - AppImage
+    - deb
+publish:
+  provider: github
+  owner: xueweijian
+  repo: deepseek-harness
+  # Published directly so electron-updater can discover each build without a
+  # manual draft-publish step; the release is anchored at the v<version> tag.
+  releaseType: release
+artifactName: ${name}-${version}-${os}-${arch}.${ext}
