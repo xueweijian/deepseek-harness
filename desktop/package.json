@@ -4,6 +4,10 @@
   "version": "0.2.0",
   "private": true,
   "description": "DSH Desktop - Electron shell around the DeepSeek Harness web UI, shipped with its own Node runtime.",
+  "author": {
+    "name": "xueweijian",
+    "email": "215381336@qq.com"
+  },
   "main": "dist-electron/main.cjs",
   "packageManager": "pnpm@11.7.0",
   "scripts": {

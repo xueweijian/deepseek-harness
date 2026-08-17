@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const electronApp = vi.hoisted(() => ({
   app: { isPackaged: true },
@@ -16,6 +16,14 @@ vi.mock('electron-updater', () => ({ autoUpdater }))
 import { installDownloadedUpdate, startUpdater } from '../updater.ts'
 
 const realPlatform = process.platform
+
+// The active-update suites below pin win32: on a macOS host the real
+// process.platform routes every call through the darwin skip before any
+// listener registers, failing them for reasons unrelated to the code under
+// test. The darwin suite pins its own platform.
+beforeEach(() => {
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+})
 
 /** The handler registered for `name`, typed by what the test invokes it with. */
 function listener<T>(name: string): (payload: T) => void {

@@ -8,7 +8,7 @@
  * @module dsh-desktop/sidecar
  */
 
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs'
 import { createServer, type AddressInfo } from 'node:net'
 import { homedir } from 'node:os'
@@ -170,15 +170,22 @@ export async function pollReady(url: string): Promise<void> {
   }
 }
 
-/** Kill the whole process tree of `child`: taskkill on Windows, the process
- * group (child spawns detached as its leader) on posix with SIGKILL follow-up. */
+/** Stop `child` and its process group where the platform exposes one. POSIX
+ * children are detached leaders; Windows uses Node's supported child handle
+ * because invoking a shell process-tree command would introduce a command
+ * injection boundary. The sidecar's dsh child owns no long-lived descendants
+ * outside its own handle in the supported runtime closure. */
 function killTree(child: ChildProcess): void {
   const pid = child.pid
   /* v8 ignore next 2 -- guards the readyTimer race where the child exits
    * between the timeout firing and the kill; stop() pre-checks instead. */
   if (pid === undefined || child.exitCode !== null || child.signalCode !== null) return
   if (process.platform === 'win32') {
-    spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
+    try {
+      child.kill()
+    } catch {
+      /* child already exited between the state check and kill */
+    }
     return
   }
   /* v8 ignore start: posix process-group teardown; unreachable on Windows
