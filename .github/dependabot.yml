@@ -6,12 +6,43 @@ updates:
     exclude-paths:
       # Vendored Cordis sources follow vendor/README.md instead of registry updates.
       - "vendor/**"
+      # The desktop shell and its runtime closure are independent pnpm
+      # projects outside the root workspace; they get their own entries below.
+      - "desktop/**"
     schedule:
       interval: "cron"
       cronjob: "0 4 * * *"
       timezone: "Asia/Shanghai"
     cooldown:
       default-days: 30
+    labels:
+      - "kind/dependency"
+      - "area/infra"
+
+  # The desktop Electron toolchain (electron, electron-builder, esbuild).
+  - package-ecosystem: "npm"
+    directory: "/desktop"
+    schedule:
+      interval: "cron"
+      cronjob: "0 4 * * *"
+      timezone: "Asia/Shanghai"
+    cooldown:
+      default-days: 7
+    labels:
+      - "kind/dependency"
+      - "area/infra"
+
+  # The shipped @deepseek-ai/dsh runtime closure. A bump PR runs the desktop
+  # CI validation build and smoke test, so upstream breaking changes surface
+  # before merge.
+  - package-ecosystem: "npm"
+    directory: "/desktop/runtime"
+    schedule:
+      interval: "cron"
+      cronjob: "0 4 * * *"
+      timezone: "Asia/Shanghai"
+    cooldown:
+      default-days: 7
     labels:
       - "kind/dependency"
       - "area/infra"

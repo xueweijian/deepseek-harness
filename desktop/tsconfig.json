@@ -8,9 +8,10 @@
     "strict": true,
     "noImplicitAny": true,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "isolatedModules": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true
   },
-  "include": ["electron"]
+  "include": ["electron", "vitest.config.ts"]
 }

@@ -3,18 +3,22 @@
  * Download the official Node.js runtime the dsh sidecar runs under into
  * build/node-runtime, sha256-verified against the same directory's
  * SHASUMS256.txt on nodejs.org, and extract it into a directly usable
- * layout (node.exe at the root on Windows; bin/ + lib/ on Linux).
+ * layout (node.exe at the root on Windows; bin/ + lib/ elsewhere).
+ *
+ * Usage: fetch-node.mjs [--arch arm64|x64]
+ * The arch defaults to the running host's; a mismatched stamp forces a
+ * refetch so sequential cross-builds cannot reuse each other's runtime.
  */
 
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, sep } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import AdmZip from 'adm-zip'
 
 /** Pinned Node.js release shipped with the app. */
-const NODE_VERSION = '24.19.0'
+export const NODE_VERSION = '24.19.0'
 /** Only https downloads from this exact host are accepted. */
 const DIST_ORIGIN = 'https://nodejs.org/dist'
 /** Stamp recording the extracted version, consulted for idempotent reruns. */
@@ -23,10 +27,35 @@ const STAMP_NAME = '.fetched.json'
 const desktopRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 const runtimeDir = join(desktopRoot, 'build', 'node-runtime')
 
-/** Archive file name for the current platform. */
-function archiveName(platform) {
-  if (platform === 'win32') return `node-v${NODE_VERSION}-win-x64.zip`
-  if (platform === 'linux') return `node-v${NODE_VERSION}-linux-x64.tar.xz`
+/** Arch value from `--arch <a>` or `--arch=<a>`, when given. */
+export function archFromArgv(argv = process.argv) {
+  const equals = argv.find((arg) => arg.startsWith('--arch='))
+  if (equals !== undefined) return equals.slice('--arch='.length)
+  const index = argv.indexOf('--arch')
+  if (index === -1) return undefined
+  const value = argv[index + 1]
+  if (value === undefined || value.startsWith('--')) return undefined
+  return value
+}
+
+/** Reject platform/arch combinations no installer ships. */
+export function validateTarget(platform, arch) {
+  if (!['arm64', 'x64'].includes(arch)) {
+    throw new Error(`unsupported arch: ${String(arch)} (expected arm64 or x64)`)
+  }
+  if (platform === 'win32' && arch !== 'x64') {
+    throw new Error(`unsupported combination: win32/${arch} (Windows ships x64 only)`)
+  }
+  if (platform === 'linux' && arch !== 'x64') {
+    throw new Error(`unsupported combination: linux/${arch} (Linux ships x64 only)`)
+  }
+}
+
+/** Archive file name for the current platform and arch. */
+export function archiveName(platform, targetArch) {
+  if (platform === 'win32') return `node-v${NODE_VERSION}-win-${targetArch}.zip`
+  if (platform === 'linux') return `node-v${NODE_VERSION}-linux-${targetArch}.tar.xz`
+  if (platform === 'darwin') return `node-v${NODE_VERSION}-darwin-${targetArch}.tar.gz`
   throw new Error(`unsupported platform: ${platform}`)
 }
 
@@ -122,29 +151,31 @@ function extractWin(archivePath) {
   }
 }
 
-/** Extract the Linux tar.xz with the system tar, stripping the top directory. */
-function extractLinux(archivePath) {
+/** Extract the Linux/macOS tar archive with the system tar, stripping the top
+ * directory; `.tar.xz` uses -xJf, `.tar.gz` uses -xzf. */
+function extractTar(archivePath, topDirName) {
   const staging = join(runtimeDir, '.extract')
   rmSync(staging, { recursive: true, force: true })
   mkdirSync(staging, { recursive: true })
-  const result = spawnSync('tar', ['-xJf', archivePath, '-C', staging], { stdio: ['ignore', 'pipe', 'pipe'] })
+  const decompress = archivePath.endsWith('.tar.xz') ? '-xJf' : '-xzf'
+  const result = spawnSync('tar', [decompress, archivePath, '-C', staging], { stdio: ['ignore', 'pipe', 'pipe'] })
   if (result.error !== undefined || result.status !== 0) {
     throw new Error(`tar extraction failed: ${String(result.error ?? result.stderr?.toString() ?? `exit ${String(result.status)}`)}`)
   }
-  const top = join(staging, `node-v${NODE_VERSION}-linux-x64`)
+  const top = join(staging, topDirName)
   for (const entry of readdirSync(top)) {
     renameSync(join(top, entry), join(runtimeDir, entry))
   }
   rmSync(staging, { recursive: true, force: true })
 }
 
-/** True when the stamp matches and the executable still runs this version. */
-function stampOk(exePath) {
-  const stampPath = join(runtimeDir, STAMP_NAME)
+/** True when the stamp at `stampPath` matches this version and arch and the
+ * executable still runs this version. */
+export function stampOk(exePath, arch, stampPath) {
   if (!existsSync(stampPath) || !existsSync(exePath)) return false
   try {
     const stamp = JSON.parse(readFileSync(stampPath, 'utf8'))
-    if (stamp.version !== NODE_VERSION || stamp.sha256 === undefined) return false
+    if (stamp.version !== NODE_VERSION || stamp.arch !== arch || stamp.sha256 === undefined) return false
   } catch {
     return false
   }
@@ -161,23 +192,34 @@ function verifyExecutable(exePath) {
   console.log(`extracted node reports ${probe.stdout.toString().trim()}`)
 }
 
-mkdirSync(runtimeDir, { recursive: true })
-const archive = archiveName(process.platform)
-const exePath = join(runtimeDir, nodeRelPath(process.platform))
-if (stampOk(exePath)) {
-  console.log(`node v${NODE_VERSION} already present: ${exePath}`)
-  process.exit(0)
+/** Download and lay out the runtime for this platform and arch. */
+async function main() {
+  const arch = archFromArgv() ?? process.arch
+  validateTarget(process.platform, arch)
+  mkdirSync(runtimeDir, { recursive: true })
+  const archive = archiveName(process.platform, arch)
+  const exePath = join(runtimeDir, nodeRelPath(process.platform))
+  const stampPath = join(runtimeDir, STAMP_NAME)
+  if (stampOk(exePath, arch, stampPath)) {
+    console.log(`node v${NODE_VERSION} (${process.platform}-${arch}) already present: ${exePath}`)
+    return
+  }
+  const expected = await expectedSha256(archive)
+  const archivePath = await ensureArchive(archive, expected)
+  clearRuntimeDir([archive, `${archive}.part`, STAMP_NAME])
+  if (process.platform === 'win32') {
+    extractWin(archivePath)
+  } else {
+    extractTar(archivePath, `node-v${NODE_VERSION}-${process.platform}-${arch}`)
+  }
+  rmSync(archivePath, { force: true })
+  pruneRuntime(process.platform)
+  writeFileSync(stampPath, `${JSON.stringify({ version: NODE_VERSION, arch, sha256: expected }, null, 2)}\n`)
+  verifyExecutable(exePath)
+  console.log(`node v${NODE_VERSION} (${process.platform}-${arch}) ready at ${exePath}`)
 }
-const expected = await expectedSha256(archive)
-const archivePath = await ensureArchive(archive, expected)
-clearRuntimeDir([archive, `${archive}.part`, STAMP_NAME])
-if (process.platform === 'win32') {
-  extractWin(archivePath)
-} else {
-  extractLinux(archivePath)
+
+const invokedAsScript = import.meta.url === pathToFileURL(process.argv[1] ?? '').href
+if (invokedAsScript) {
+  await main()
 }
-rmSync(archivePath, { force: true })
-pruneRuntime(process.platform)
-writeFileSync(join(runtimeDir, STAMP_NAME), `${JSON.stringify({ version: NODE_VERSION, sha256: expected }, null, 2)}\n`)
-verifyExecutable(exePath)
-console.log(`node v${NODE_VERSION} ready at ${exePath}`)

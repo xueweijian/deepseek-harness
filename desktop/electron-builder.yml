@@ -4,6 +4,9 @@ directories:
   output: dist
 files:
   - dist-electron/**
+protocols:
+  - name: DSH Desktop
+    schemes: ['dsh']
 extraResources:
   - from: build/node-runtime
     to: node
@@ -11,17 +14,33 @@ extraResources:
     to: dsh/package.json
   - from: runtime/node_modules
     to: dsh/node_modules
+  - from: build/icon.png
+    to: app-icon.png
 win:
   icon: build/icon.ico
   target:
     - nsis
     - zip
+  # Authenticode signing activates automatically when the build env carries
+  # CSC_LINK (base64 PFX) and CSC_KEY_PASSWORD; without them the build stays
+  # unsigned, which is why the README documents the SmartScreen bypass.
 linux:
   icon: build/icon.png
   category: Development
   target:
     - AppImage
     - deb
+mac:
+  icon: build/icon.png
+  category: public.app-category.developer-tools
+  target:
+    - dmg
+    - zip
+  # Unsigned (ad-hoc) builds: Gatekeeper needs the user's first-run approval,
+  # and electron-updater stays disabled on darwin because Squirrel.Mac cannot
+  # self-update without a real signature. Remove this line and provide Apple
+  # Developer credentials (CSC_NAME/CSC_KEY_PASSWORD) to sign and unlock both.
+  identity: null
 publish:
   provider: github
   owner: xueweijian

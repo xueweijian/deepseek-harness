@@ -1,13 +1,15 @@
 /**
  * dsh web sidecar supervisor: spawns the bundled `dsh web` server under the
- * packaged Node runtime, confirms readiness from its URL line, keeps it alive
- * with a bounded exponential-backoff restart budget, collects a log tail for
- * the error page and the log file, and tears the process tree down on exit.
+ * packaged Node runtime, confirms readiness by polling the loopback URL we
+ * told the server to serve (independent of the child's log format), keeps it
+ * alive with a bounded exponential-backoff restart budget, collects a log
+ * tail for the error page and the log file, and tears the process tree down
+ * on exit.
  * @module dsh-desktop/sidecar
  */
 
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
-import { appendFileSync, mkdirSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync } from 'node:fs'
 import { createServer, type AddressInfo } from 'node:net'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -16,20 +18,39 @@ import { app } from 'electron'
 
 /** Loopback host shared by the server bind and the loaded URL. */
 const HOST = '127.0.0.1'
-/** Upper bound from spawn to the readiness URL line, per attempt. */
-const READY_TIMEOUT_MS = 60_000
-/** Crash restarts allowed per startSidecar call before reporting fatal. */
-const MAX_RESTARTS = 3
-/** Base delay for the exponential restart backoff; doubles per restart. */
-const BACKOFF_BASE_MS = 1_000
+/** Upper bound from spawn to the first successful HTTP response, per attempt.
+ * Overridable for machines whose first boot runs slowly (AV scans, cold
+ * disks): DSH_SIDECAR_READY_TIMEOUT_MS. */
+const READY_TIMEOUT_MS = readPositiveIntEnv('DSH_SIDECAR_READY_TIMEOUT_MS', 60_000)
+/** Spacing between readiness polls while the server is starting. */
+const POLL_INTERVAL_MS = 250
+/** Per-poll HTTP timeout; a server slower than this is retried, not failed. */
+const POLL_TIMEOUT_MS = 2_000
+/** Crash restarts allowed per startSidecar call before reporting fatal.
+ * Overridable: DSH_SIDECAR_MAX_RESTARTS. */
+const MAX_RESTARTS = readPositiveIntEnv('DSH_SIDECAR_MAX_RESTARTS', 3)
+/** Base delay for the exponential restart backoff; doubles per restart.
+ * Overridable: DSH_SIDECAR_BACKOFF_BASE_MS. */
+const BACKOFF_BASE_MS = readPositiveIntEnv('DSH_SIDECAR_BACKOFF_BASE_MS', 1_000)
 /** Longest stop() waits for process-tree teardown before resolving. */
 const STOP_GRACE_MS = 5_000
 /** Delay after SIGTERM before the posix kill escalates to SIGKILL. */
 const KILL_GRACE_MS = 1_000
 /** Retained output lines for the error page and diagnostics. */
 const LOG_RING_LINES = 200
-/** Readiness marker `dsh web` prints once the server accepts requests. */
-const READY_LINE = /^dsh web: (http:\/\/127\.0\.0\.1:\d+)/
+
+/** Read a positive-integer environment override, failing loud at load when the
+ * value is set but unparsable: a typo silently ignored is worse than a boot
+ * error naming the variable. */
+function readPositiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name]
+  if (raw === undefined || raw === '') return fallback
+  const value = Number.parseInt(raw, 10)
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer, got: ${raw}`)
+  }
+  return value
+}
 
 /** Absolute paths of the sidecar's Node executable and dsh entry. */
 export interface SidecarPaths {
@@ -59,23 +80,52 @@ export interface SidecarCallbacks {
   onFatal(failure: SidecarFailure): void
 }
 
-/** Resolve the sidecar's Node executable and dsh entry for this run mode. */
+/** Resolve the sidecar's Node executable and dsh entry for this run mode.
+ * Throws with an actionable message when the dsh package or its bin entry is
+ * unreadable, so a broken runtime closure fails loud instead of looping. */
 export function resolveSidecarPaths(): SidecarPaths {
   if (app.isPackaged) {
     const exeSegments = process.platform === 'win32' ? ['node.exe'] : ['bin', 'node']
     return {
       nodeExe: join(process.resourcesPath, 'node', ...exeSegments),
-      dshBin: join(process.resourcesPath, 'dsh', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'),
+      dshBin: resolveDshEntry(join(process.resourcesPath, 'dsh', 'node_modules', '@deepseek-ai', 'dsh')),
     }
   }
   return {
     nodeExe: 'node',
-    dshBin: join(app.getAppPath(), 'runtime', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'),
+    dshBin: resolveDshEntry(join(app.getAppPath(), 'runtime', 'node_modules', '@deepseek-ai', 'dsh')),
   }
 }
 
-/** Log file sink for this run mode: user logs dir packaged, project dir in dev. */
+/** Resolve the CLI entry from the installed dsh package manifest's `bin`
+ * field, so an upstream repackaging that moves `lib/bin.js` needs no change
+ * here as long as the manifest stays truthful. */
+export function resolveDshEntry(packageDir: string): string {
+  const manifestPath = join(packageDir, 'package.json')
+  let bin: unknown
+  try {
+    bin = (JSON.parse(readFileSync(manifestPath, 'utf8')) as { bin?: unknown }).bin
+  } catch (error) {
+    throw new Error(`dsh package manifest unreadable at ${manifestPath}: ${String(error)}`)
+  }
+  if (typeof bin === 'string' && bin !== '') return join(packageDir, bin)
+  if (typeof bin === 'object' && bin !== null) {
+    const entries = Object.entries(bin as Record<string, unknown>)
+    const named = entries.find(([name]) => name === 'dsh')
+    const single = entries.length === 1 ? entries[0] : undefined
+    const chosen = named ?? single
+    if (chosen !== undefined && typeof chosen[1] === 'string' && chosen[1] !== '') {
+      return join(packageDir, chosen[1])
+    }
+  }
+  throw new Error(`dsh package manifest has no usable bin entry: ${manifestPath}`)
+}
+
+/** Log file sink for this run mode: user logs dir packaged, project dir in dev.
+ * The packaged arm runs for real in the packaged CI smoke, which asserts on
+ * the written sidecar.log; unit tests only reach the dev arm. */
 function logFilePath(): string {
+  /* v8 ignore next -- packaged arm; see jsdoc */
   if (app.isPackaged) return join(app.getPath('logs'), 'sidecar.log')
   return join(app.getAppPath(), '.dev', 'sidecar.log')
 }
@@ -85,6 +135,7 @@ function reservePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = createServer()
     server.unref()
+    /* v8 ignore next -- listen(0) failure is not reproducible from a healthy host */
     server.on('error', (error: NodeJS.ErrnoException) => { reject(error) })
     server.listen(0, HOST, () => {
       const address = server.address() as AddressInfo
@@ -99,15 +150,39 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => { setTimeout(resolve, ms) })
 }
 
+/** Poll `url` until it answers with any HTTP response. Connection refused and
+ * per-attempt timeouts are the normal pre-ready state and simply retry; the
+ * caller bounds the total wait through the child's readiness timer. */
+export async function pollReady(url: string): Promise<void> {
+  for (;;) {
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(POLL_TIMEOUT_MS) })
+      try {
+        /* v8 ignore next 3 -- cancel() rejecting on an open body is not reproducible */
+        await response.body?.cancel()
+      } catch {
+        /* body already closed after a complete response */
+      }
+      return
+    } catch {
+      await delay(POLL_INTERVAL_MS)
+    }
+  }
+}
+
 /** Kill the whole process tree of `child`: taskkill on Windows, the process
  * group (child spawns detached as its leader) on posix with SIGKILL follow-up. */
 function killTree(child: ChildProcess): void {
   const pid = child.pid
+  /* v8 ignore next 2 -- guards the readyTimer race where the child exits
+   * between the timeout firing and the kill; stop() pre-checks instead. */
   if (pid === undefined || child.exitCode !== null || child.signalCode !== null) return
   if (process.platform === 'win32') {
     spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
     return
   }
+  /* v8 ignore start: posix process-group teardown; unreachable on Windows
+   * hosts, exercised by the posix legs of the CI matrix. */
   try {
     process.kill(-pid, 'SIGTERM')
   } catch {
@@ -121,6 +196,7 @@ function killTree(child: ChildProcess): void {
     }
   }, KILL_GRACE_MS)
   killer.unref()
+  /* v8 ignore end */
 }
 
 /** Observed end state of one child process attempt. */
@@ -131,13 +207,18 @@ interface AttemptOutcome {
 }
 
 /** One supervision session, from startSidecar to fatal or stopSidecar. */
-class Supervisor {
+export class Supervisor {
   private child: ChildProcess | undefined
   private readonly ring: string[] = []
   private restartsUsed = 0
   private stopping = false
 
-  constructor(private readonly callbacks: SidecarCallbacks) {}
+  /** `paths` pins the Node executable and dsh entry instead of resolving the
+   * run mode's own; production callers omit it. */
+  constructor(
+    private readonly callbacks: SidecarCallbacks,
+    private readonly paths?: SidecarPaths,
+  ) {}
 
   /** Supervision loop: spawn until stopped or the restart budget is spent. */
   async run(): Promise<void> {
@@ -162,11 +243,14 @@ class Supervisor {
     }
   }
 
-  /** Stop the active child and let run() unwind; safe to await from the app. */
+  /** Stop the active child and let run() unwind; safe to await from the app.
+   * A child that already exited needs neither kill nor the grace wait —
+   * registering another exit listener on it would never fire. */
   async stop(): Promise<void> {
     this.stopping = true
     const child = this.child
     if (child === undefined) return
+    if (child.exitCode !== null || child.signalCode !== null) return
     killTree(child)
     await Promise.race([onceExit(child), delay(STOP_GRACE_MS)])
   }
@@ -177,10 +261,11 @@ class Supervisor {
   }
 
   /** Spawn one dsh web child and wait for its exit; notifies onReady with the
-   * URL the child itself printed, without waiting for the exit. */
+   * URL we told the server to serve, without waiting for the exit. */
   private async spawnOnce(): Promise<AttemptOutcome> {
-    const paths = resolveSidecarPaths()
+    const paths = this.paths ?? resolveSidecarPaths()
     const port = await reservePort()
+    const url = `http://${HOST}:${String(port)}`
     const child = spawn(paths.nodeExe, [paths.dshBin, 'web', '--port', String(port), '--host', HOST], {
       cwd: homedir(),
       env: process.env,
@@ -190,37 +275,33 @@ class Supervisor {
     })
     this.child = child
     this.log(`sidecar: spawned ${paths.nodeExe} ${paths.dshBin} web --port ${String(port)} --host ${HOST} (pid ${String(child.pid)})`)
-    const outcome: AttemptOutcome = { exitCode: null, signal: null, timedOut: false }
-    let readyResolve: ((url: string) => void) | undefined
-    const ready = new Promise<string>((resolve) => { readyResolve = resolve })
-    const exited = onceExit(child, (code, signal) => {
-      outcome.exitCode = code
-      outcome.signal = signal
+    let exitCode: number | null = null
+    let signal: NodeJS.Signals | null = null
+    let timedOut = false
+    const exited = onceExit(child, (code, sig) => {
+      exitCode = code
+      signal = sig
     })
     const readyTimer = setTimeout(() => {
-      outcome.timedOut = true
+      timedOut = true
       this.log('sidecar: readiness timeout, killing the child')
       killTree(child)
     }, READY_TIMEOUT_MS)
-    this.wireStream(child.stdout, 'out', (line) => {
-      const match = READY_LINE.exec(line)
-      if (match !== null) readyResolve?.(match[1])
-    })
-    this.wireStream(child.stderr, 'err', () => {})
-    const winner = await Promise.race([ready.then(() => 'ready' as const), exited.then(() => 'exit' as const)])
+    this.wireStream(child.stdout, 'out')
+    this.wireStream(child.stderr, 'err')
+    const winner = await Promise.race([pollReady(url).then(() => 'ready' as const), exited.then(() => 'exit' as const)])
     clearTimeout(readyTimer)
-    if (winner === 'ready') this.callbacks.onReady(await ready)
+    if (winner === 'ready') this.callbacks.onReady(url)
     await exited
-    return outcome
+    return { exitCode, signal, timedOut }
   }
 
   /** Tag every line with its stream, push it to the ring, and append to the
-   * log file; `onLine` sees the raw line first. */
-  private wireStream(stream: NodeJS.ReadableStream | null, tag: string, onLine: (line: string) => void): void {
+   * log file; diagnostics only — readiness never depends on this output. */
+  private wireStream(stream: NodeJS.ReadableStream | null, tag: string): void {
     if (stream === null) return
     const lines = createInterface({ input: stream })
     lines.on('line', (line: string) => {
-      onLine(line)
       this.log(`[${tag}] ${line}`)
     })
   }
@@ -263,12 +344,21 @@ function onceExit(
 let active: Supervisor | undefined
 
 /** Start supervising the dsh web sidecar; readiness and fatality arrive through
- * `callbacks`. Throws when a session is already running. */
+ * `callbacks`. Throws when a session is already running. Setup failures — an
+ * unreadable dsh manifest, for example — surface through onFatal with the
+ * reason in the log tail instead of an unhandled rejection. */
 export function startSidecar(callbacks: SidecarCallbacks): void {
   if (active !== undefined) throw new Error('sidecar already started')
   const supervisor = new Supervisor(callbacks)
   active = supervisor
-  void supervisor.run().finally(() => {
+  void supervisor.run().catch((error: unknown) => {
+    callbacks.onFatal({
+      exitCode: null,
+      signal: null,
+      timedOut: false,
+      logTail: `sidecar: ${String(error)}`,
+    })
+  }).finally(() => {
     if (active === supervisor) active = undefined
   })
 }

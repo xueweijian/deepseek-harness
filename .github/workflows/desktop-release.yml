@@ -1,9 +1,9 @@
-# Build the standalone desktop shell for Windows (nsis + zip) and Linux
-# (AppImage + deb). A desktop-v* tag push builds both platforms and publishes:
-# electron-builder --publish always creates the GitHub release (releaseType:
-# release, so auto-update sees it) and uploads the artifacts. Pull requests and
-# master pushes touching desktop run the same build with --publish never as
-# validation.
+# Build the standalone desktop shell for Windows (nsis + zip), Linux
+# (AppImage + deb), and macOS (dmg + zip, arm64 and x64). A desktop-v* tag
+# push builds all platforms and publishes: electron-builder --publish always
+# creates the GitHub release (releaseType: release, so auto-update sees it)
+# and uploads the artifacts. Pull requests and master pushes touching desktop
+# run the same build with --publish never as validation.
 name: Release (Desktop)
 
 on:
@@ -55,6 +55,12 @@ jobs:
       - name: Fetch bundled Node runtime
         run: pnpm --dir desktop run fetch-node
 
+      - name: Typecheck
+        run: pnpm --dir desktop run typecheck
+
+      - name: Unit tests
+        run: pnpm --dir desktop run test
+
       - name: Install dsh runtime closure
         run: pnpm --dir desktop run runtime:install
 
@@ -68,6 +74,11 @@ jobs:
         if: github.ref_type == 'tag' && startsWith(github.ref_name, 'desktop-v')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Optional Authenticode signing: with repo secrets CSC_LINK (base64
+          # PFX) and CSC_KEY_PASSWORD set, electron-builder signs the
+          # installers; unset secrets keep the current unsigned behavior.
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
         run: pnpm --dir desktop exec electron-builder --win nsis zip --publish always
 
       - name: Package installers (validation)
@@ -79,7 +90,7 @@ jobs:
         working-directory: desktop
         env:
           SMOKE_NODE: dist/win-unpacked/resources/node/node.exe
-          SMOKE_DSH_BIN: dist/win-unpacked/resources/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js
+          SMOKE_DSH_DIR: dist/win-unpacked/resources/dsh/node_modules/@deepseek-ai/dsh
         run: node scripts/smoke-sidecar.mjs
 
   linux:
@@ -110,6 +121,12 @@ jobs:
       - name: Fetch bundled Node runtime
         run: pnpm --dir desktop run fetch-node
 
+      - name: Typecheck
+        run: pnpm --dir desktop run typecheck
+
+      - name: Unit tests
+        run: pnpm --dir desktop run test
+
       - name: Install dsh runtime closure
         run: pnpm --dir desktop run runtime:install
 
@@ -134,5 +151,77 @@ jobs:
         working-directory: desktop
         env:
           SMOKE_NODE: dist/linux-unpacked/resources/node/bin/node
-          SMOKE_DSH_BIN: dist/linux-unpacked/resources/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js
+          SMOKE_DSH_DIR: dist/linux-unpacked/resources/dsh/node_modules/@deepseek-ai/dsh
+        run: node scripts/smoke-sidecar.mjs
+
+  macos:
+    name: macOS / dmg + zip (${{ matrix.arch }})
+    runs-on: macos-latest
+    timeout-minutes: 60
+    # The windows job creates the GitHub release; this job only uploads its
+    # arch-suffixed artifacts, so it can run in parallel with linux.
+    needs: windows
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both arches cross-build on the arm64 runner: extraResources are
+        # plain files and the sidecar Node runtime comes from --arch.
+        include:
+          - arch: arm64
+            unpacked: mac-arm64
+          - arch: x64
+            unpacked: mac
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: |
+            desktop/pnpm-lock.yaml
+            desktop/runtime/pnpm-lock.yaml
+
+      - name: Install desktop dependencies
+        run: pnpm --dir desktop install --frozen-lockfile
+
+      - name: Fetch bundled Node runtime (${{ matrix.arch }})
+        run: pnpm --dir desktop exec node scripts/fetch-node.mjs --arch ${{ matrix.arch }}
+
+      - name: Typecheck
+        run: pnpm --dir desktop run typecheck
+
+      - name: Unit tests
+        run: pnpm --dir desktop run test
+
+      - name: Install dsh runtime closure
+        run: pnpm --dir desktop run runtime:install
+
+      - name: Build electron main
+        run: pnpm --dir desktop run build:electron
+
+      - name: Smoke test (headless)
+        run: pnpm --dir desktop run smoke
+
+      - name: Package installers and publish
+        if: github.ref_type == 'tag' && startsWith(github.ref_name, 'desktop-v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm --dir desktop exec electron-builder --mac dmg zip --arch ${{ matrix.arch }} --publish always
+
+      - name: Package installers (validation)
+        if: github.ref_type != 'tag' || !startsWith(github.ref_name, 'desktop-v')
+        run: pnpm --dir desktop exec electron-builder --mac dmg zip --arch ${{ matrix.arch }} --publish never
+
+      - name: Smoke test the packaged sidecar
+        shell: bash
+        working-directory: desktop
+        env:
+          # The x64 sidecar Node runs under Rosetta on the arm64 runner.
+          SMOKE_NODE: dist/${{ matrix.unpacked }}/resources/node/bin/node
+          SMOKE_DSH_DIR: dist/${{ matrix.unpacked }}/resources/dsh/node_modules/@deepseek-ai/dsh
         run: node scripts/smoke-sidecar.mjs
