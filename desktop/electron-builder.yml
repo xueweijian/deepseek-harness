@@ -1,6 +1,5 @@
 appId: io.github.xueweijian.dsh-desktop
 productName: DSH Desktop
-homepage: https://github.com/xueweijian/deepseek-harness
 directories:
   output: dist
 files:
