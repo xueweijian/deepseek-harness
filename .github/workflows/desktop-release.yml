@@ -211,11 +211,11 @@ jobs:
         if: github.ref_type == 'tag' && startsWith(github.ref_name, 'desktop-v')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: pnpm --dir desktop exec electron-builder --mac dmg zip --arch ${{ matrix.arch }} --publish always
+        run: pnpm --dir desktop exec electron-builder --mac dmg zip --${{ matrix.arch }} --publish always
 
       - name: Package installers (validation)
         if: github.ref_type != 'tag' || !startsWith(github.ref_name, 'desktop-v')
-        run: pnpm --dir desktop exec electron-builder --mac dmg zip --arch ${{ matrix.arch }} --publish never
+        run: pnpm --dir desktop exec electron-builder --mac dmg zip --${{ matrix.arch }} --publish never
 
       - name: Smoke test the packaged sidecar
         shell: bash
