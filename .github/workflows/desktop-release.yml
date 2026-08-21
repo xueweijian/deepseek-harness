@@ -156,7 +156,7 @@ jobs:
 
   macos:
     name: macOS / dmg + zip (${{ matrix.arch }})
-    runs-on: macos-latest
+    runs-on: ${{ matrix.runs-on }}
     timeout-minutes: 60
     # The windows job creates the GitHub release; this job only uploads its
     # arch-suffixed artifacts, so it can run in parallel with linux.
@@ -164,12 +164,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Both arches cross-build on the arm64 runner: extraResources are
-        # plain files and the sidecar Node runtime comes from --arch.
+        # Each arch builds natively: an x64 sidecar Node under Rosetta on the
+        # arm64 runner crashed natively mid-boot, so x64 runs on an Intel
+        # image (macos-26-intel is the successor if macos-15-intel retires).
         include:
           - arch: arm64
+            runs-on: macos-latest
             unpacked: mac-arm64
           - arch: x64
+            runs-on: macos-15-intel
             unpacked: mac
     steps:
       - uses: actions/checkout@v6
@@ -221,7 +224,8 @@ jobs:
         shell: bash
         working-directory: desktop
         env:
-          # The x64 sidecar Node runs under Rosetta on the arm64 runner.
-          SMOKE_NODE: dist/${{ matrix.unpacked }}/resources/node/bin/node
-          SMOKE_DSH_DIR: dist/${{ matrix.unpacked }}/resources/dsh/node_modules/@deepseek-ai/dsh
+          # macOS unpacked builds live inside the .app bundle, not a bare
+          # resources/ directory like Windows and Linux.
+          SMOKE_NODE: "dist/${{ matrix.unpacked }}/DSH Desktop.app/Contents/Resources/node/bin/node"
+          SMOKE_DSH_DIR: "dist/${{ matrix.unpacked }}/DSH Desktop.app/Contents/Resources/dsh/node_modules/@deepseek-ai/dsh"
         run: node scripts/smoke-sidecar.mjs
