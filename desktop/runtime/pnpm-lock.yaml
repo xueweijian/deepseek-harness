@@ -12,7 +12,7 @@ importers:
   .:
     dependencies:
       '@deepseek-ai/dsh':
-        specifier: 0.1.0-rc.6
+        specifier: 0.1.2-rc.1
         version: 0.1.0-rc.6(4b02b31f4347d42e02dd8ae2631af2b2)
 
 packages:
