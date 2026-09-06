@@ -150,23 +150,25 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => { setTimeout(resolve, ms) })
 }
 
-/** Poll `url` until it answers with any HTTP response. Connection refused and
- * per-attempt timeouts are the normal pre-ready state and simply retry; the
+/** Poll `url` until it answers with a successful HTTP response. Connection refused,
+ * per-attempt timeouts, and pre-mount 404s are the normal pre-ready state and simply retry; the
  * caller bounds the total wait through the child's readiness timer. */
 export async function pollReady(url: string): Promise<void> {
   for (;;) {
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(POLL_TIMEOUT_MS) })
+      const ok = response.status >= 200 && response.status < 400
       try {
         /* v8 ignore next 3 -- cancel() rejecting on an open body is not reproducible */
         await response.body?.cancel()
       } catch {
         /* body already closed after a complete response */
       }
-      return
+      if (ok) return
     } catch {
-      await delay(POLL_INTERVAL_MS)
+      /* network failure before ready */
     }
+    await delay(POLL_INTERVAL_MS)
   }
 }
 

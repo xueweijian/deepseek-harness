@@ -123,20 +123,22 @@ const dead = new Promise((resolve) => {
   child.once('error', (error) => { lines.push(`[error] ${String(error)}`); resolve(null) })
 })
 
-/** Poll the URL until any HTTP response arrives; the watchdog bounds the wait. */
+/** Poll the URL until a successful HTTP response arrives; the watchdog bounds the wait. */
 async function pollReady() {
   for (;;) {
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(POLL_TIMEOUT_MS) })
+      const ok = response.status >= 200 && response.status < 400
       try {
         await response.body?.cancel()
       } catch {
         /* body already closed after a complete response */
       }
-      return
+      if (ok) return
     } catch {
-      await new Promise((resolve) => { setTimeout(resolve, POLL_INTERVAL_MS) })
+      /* retry until ready */
     }
+    await new Promise((resolve) => { setTimeout(resolve, POLL_INTERVAL_MS) })
   }
 }
 

@@ -143,7 +143,7 @@ describe('pollReady', () => {
     })
   }
 
-  it('resolves once the URL answers with any HTTP response', async () => {
+  it('resolves once the URL answers with an OK HTTP response', async () => {
     const port = await freePort()
     await okServer(port)
     await expect(pollReady(`http://127.0.0.1:${String(port)}/`)).resolves.toBeUndefined()
@@ -155,6 +155,24 @@ describe('pollReady', () => {
     servers.push(server)
     await new Promise<void>((resolve) => { server.listen(port, '127.0.0.1', () => { resolve() }) })
     await expect(pollReady(`http://127.0.0.1:${String(port)}/`)).resolves.toBeUndefined()
+  })
+
+  it('keeps retrying through 404 until the application mounts and answers 200', async () => {
+    const port = await freePort()
+    let ready = false
+    const server = createHttpServer((_req, res) => {
+      res.statusCode = ready ? 200 : 404
+      res.end()
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => { server.listen(port, '127.0.0.1', () => { resolve() }) })
+    let settled = false
+    const polling = pollReady(`http://127.0.0.1:${String(port)}/`).then(() => { settled = true })
+    await new Promise((resolve) => { setTimeout(resolve, 400) })
+    expect(settled).toBe(false)
+    ready = true
+    await polling
+    expect(settled).toBe(true)
   })
 
   it('keeps retrying through connection-refused until the server appears', async () => {
