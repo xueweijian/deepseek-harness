@@ -18,7 +18,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "fetch-node": "node scripts/fetch-node.mjs",
-    "runtime:install": "pnpm --dir runtime install --prod",
+    "runtime:install": "pnpm --dir runtime install --prod --no-frozen-lockfile",
     "smoke": "node scripts/smoke-sidecar.mjs",
     "start": "electron .",
     "dist": "electron-builder --publish never"

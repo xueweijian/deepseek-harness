@@ -64,6 +64,13 @@ jobs:
       - name: Install dsh runtime closure
         run: pnpm --dir desktop run runtime:install
 
+      - name: Upload updated runtime lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-pnpm-lock
+          path: desktop/runtime/pnpm-lock.yaml
+          if-no-files-found: warn
+
       - name: Build electron main
         run: pnpm --dir desktop run build:electron
 
