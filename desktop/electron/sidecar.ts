@@ -157,7 +157,7 @@ export async function pollReady(target: string | (() => string)): Promise<void> 
   for (;;) {
     const url = typeof target === 'function' ? target() : target
     try {
-      const response = await fetch(url, { signal: AbortSignal.timeout(POLL_TIMEOUT_MS) })
+      const response = await fetch(url, { signal: AbortSignal.timeout(POLL_TIMEOUT_MS), redirect: 'manual' })
       const ok = response.status >= 200 && response.status < 400
       try {
         /* v8 ignore next 3 -- cancel() rejecting on an open body is not reproducible */

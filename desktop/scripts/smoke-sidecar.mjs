@@ -130,20 +130,34 @@ const dead = new Promise((resolve) => {
   child.once('error', (error) => { lines.push(`[error] ${String(error)}`); resolve(null) })
 })
 
+let sessionCookie = ''
+
 /** Poll the URL until a successful HTTP response arrives; the watchdog bounds the wait. */
 async function pollReady() {
+  let attempt = 0
   for (;;) {
+    attempt++
     try {
-      const response = await fetch(targetUrl, { signal: AbortSignal.timeout(POLL_TIMEOUT_MS) })
+      const response = await fetch(targetUrl, {
+        signal: AbortSignal.timeout(POLL_TIMEOUT_MS),
+        redirect: 'manual',
+      })
+      const setCookie = response.headers.get('set-cookie')
+      if (setCookie) sessionCookie = setCookie.split(';')[0]
       const ok = response.status >= 200 && response.status < 400
+      if (attempt <= 5 || attempt % 20 === 0 || ok) {
+        lines.push(`[poll #${attempt}] url=${targetUrl} status=${response.status} ok=${ok}`)
+      }
       try {
         await response.body?.cancel()
       } catch {
         /* body already closed after a complete response */
       }
       if (ok) return
-    } catch {
-      /* retry until ready */
+    } catch (error) {
+      if (attempt <= 5 || attempt % 20 === 0) {
+        lines.push(`[poll #${attempt}] url=${targetUrl} err=${error?.message ?? String(error)}`)
+      }
     }
     await new Promise((resolve) => { setTimeout(resolve, POLL_INTERVAL_MS) })
   }
@@ -160,17 +174,30 @@ if (ready === null) {
 }
 
 let response
+let fetchUrl = targetUrl
 try {
-  response = await fetch(targetUrl)
+  response = await fetch(fetchUrl, {
+    headers: sessionCookie ? { cookie: sessionCookie } : undefined,
+    redirect: 'manual',
+  })
+  if (response.status >= 300 && response.status < 400) {
+    const loc = response.headers.get('location') ?? '/'
+    fetchUrl = new URL(loc, targetUrl).href
+    const nextCookie = response.headers.get('set-cookie')
+    if (nextCookie) sessionCookie = nextCookie.split(';')[0]
+    response = await fetch(fetchUrl, {
+      headers: sessionCookie ? { cookie: sessionCookie } : undefined,
+    })
+  }
 } catch (error) {
-  finish(false, `fetch failed for ${targetUrl}: ${String(error)}`)
+  finish(false, `fetch failed for ${fetchUrl}: ${String(error)}`)
 }
 const body = await response.text()
 if (response.status !== 200) {
-  finish(false, `unexpected status ${String(response.status)} for ${targetUrl}`)
+  finish(false, `unexpected status ${String(response.status)} for ${fetchUrl} (body: ${body.slice(0, 200)})`)
 }
 if (!/<html/i.test(body) && !body.includes('__DSH_BOOT__')) {
-  finish(false, `page served at ${targetUrl} does not look like the dsh web UI`)
+  finish(false, `page served at ${fetchUrl} does not look like the dsh web UI (body: ${body.slice(0, 200)})`)
 }
 const elapsed = Date.now() - startedAt
-finish(true, `smoke ok: ${targetUrl} (${String(elapsed)} ms, status 200, ${String(body.length)} bytes)`)
+finish(true, `smoke ok: ${fetchUrl} (${String(elapsed)} ms, status 200, ${String(body.length)} bytes)`)
