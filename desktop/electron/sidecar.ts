@@ -150,11 +150,12 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => { setTimeout(resolve, ms) })
 }
 
-/** Poll `url` until it answers with a successful HTTP response. Connection refused,
- * per-attempt timeouts, and pre-mount 404s are the normal pre-ready state and simply retry; the
- * caller bounds the total wait through the child's readiness timer. */
-export async function pollReady(url: string): Promise<void> {
+/** Poll `target` until it answers with a successful HTTP response. Connection refused,
+ * per-attempt timeouts, and pre-mount 404s/401s are the normal pre-ready state and simply retry; the
+ * caller bounds the total wait through the child's readiness timer. Target can be dynamic to pick up tokens. */
+export async function pollReady(target: string | (() => string)): Promise<void> {
   for (;;) {
+    const url = typeof target === 'function' ? target() : target
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(POLL_TIMEOUT_MS) })
       const ok = response.status >= 200 && response.status < 400
@@ -274,8 +275,8 @@ export class Supervisor {
   private async spawnOnce(): Promise<AttemptOutcome> {
     const paths = this.paths ?? resolveSidecarPaths()
     const port = await reservePort()
-    const url = `http://${HOST}:${String(port)}`
-    const child = spawn(paths.nodeExe, [paths.dshBin, 'web', '--port', String(port), '--host', HOST], {
+    let targetUrl = `http://${HOST}:${String(port)}`
+    const child = spawn(paths.nodeExe, [paths.dshBin, 'web', '--port', String(port), '--host', HOST, '--no-open'], {
       cwd: homedir(),
       env: process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -283,7 +284,7 @@ export class Supervisor {
       windowsHide: true,
     })
     this.child = child
-    this.log(`sidecar: spawned ${paths.nodeExe} ${paths.dshBin} web --port ${String(port)} --host ${HOST} (pid ${String(child.pid)})`)
+    this.log(`sidecar: spawned ${paths.nodeExe} ${paths.dshBin} web --port ${String(port)} --host ${HOST} --no-open (pid ${String(child.pid)})`)
     let exitCode: number | null = null
     let signal: NodeJS.Signals | null = null
     let timedOut = false
@@ -296,22 +297,31 @@ export class Supervisor {
       this.log('sidecar: readiness timeout, killing the child')
       killTree(child)
     }, READY_TIMEOUT_MS)
-    this.wireStream(child.stdout, 'out')
+    this.wireStream(child.stdout, 'out', (line) => {
+      const match = /dsh web:\s+(http:\/\/[^\s]+)/.exec(line)
+      if (match?.[1] !== undefined) {
+        targetUrl = match[1]
+      }
+    })
     this.wireStream(child.stderr, 'err')
-    const winner = await Promise.race([pollReady(url).then(() => 'ready' as const), exited.then(() => 'exit' as const)])
+    const winner = await Promise.race([
+      pollReady(() => targetUrl).then(() => 'ready' as const),
+      exited.then(() => 'exit' as const),
+    ])
     clearTimeout(readyTimer)
-    if (winner === 'ready') this.callbacks.onReady(url)
+    if (winner === 'ready') this.callbacks.onReady(targetUrl)
     await exited
     return { exitCode, signal, timedOut }
   }
 
   /** Tag every line with its stream, push it to the ring, and append to the
    * log file; diagnostics only — readiness never depends on this output. */
-  private wireStream(stream: NodeJS.ReadableStream | null, tag: string): void {
+  private wireStream(stream: NodeJS.ReadableStream | null, tag: string, onLine?: (line: string) => void): void {
     if (stream === null) return
     const lines = createInterface({ input: stream })
     lines.on('line', (line: string) => {
       this.log(`[${tag}] ${line}`)
+      onLine?.(line)
     })
   }
 

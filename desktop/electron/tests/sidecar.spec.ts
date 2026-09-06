@@ -175,6 +175,24 @@ describe('pollReady', () => {
     expect(settled).toBe(true)
   })
 
+  it('supports dynamic target URL function, picking up updated token URL', async () => {
+    const port = await freePort()
+    const server = createHttpServer((req, res) => {
+      res.statusCode = req.url === '/?token=secret' ? 200 : 401
+      res.end()
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => { server.listen(port, '127.0.0.1', () => { resolve() }) })
+    let currentUrl = `http://127.0.0.1:${String(port)}/`
+    let settled = false
+    const polling = pollReady(() => currentUrl).then(() => { settled = true })
+    await new Promise((resolve) => { setTimeout(resolve, 400) })
+    expect(settled).toBe(false)
+    currentUrl = `http://127.0.0.1:${String(port)}/?token=secret`
+    await polling
+    expect(settled).toBe(true)
+  })
+
   it('keeps retrying through connection-refused until the server appears', async () => {
     const port = await freePort()
     let settled = false

@@ -79,8 +79,8 @@ if (!existsSync(dshBin)) {
 const startedAt = Date.now()
 const lines = []
 const port = await reservePort()
-const url = `http://127.0.0.1:${String(port)}`
-const child = spawn(nodeExe, [dshBin, 'web', '--port', String(port), '--host', '127.0.0.1'], {
+let targetUrl = `http://127.0.0.1:${String(port)}`
+const child = spawn(nodeExe, [dshBin, 'web', '--port', String(port), '--host', '127.0.0.1', '--no-open'], {
   cwd: homedir(),
   env: process.env,
   stdio: ['ignore', 'pipe', 'pipe'],
@@ -115,7 +115,14 @@ function finish(ok, message) {
   process.exit(1)
 }
 
-child.stdout.on('data', (chunk) => { lines.push(`[out] ${String(chunk).trimEnd()}`) })
+child.stdout.on('data', (chunk) => {
+  const text = String(chunk)
+  lines.push(`[out] ${text.trimEnd()}`)
+  const match = /dsh web:\s+(http:\/\/[^\s]+)/.exec(text)
+  if (match?.[1] !== undefined) {
+    targetUrl = match[1]
+  }
+})
 child.stderr.on('data', (chunk) => { lines.push(`[err] ${String(chunk).trimEnd()}`) })
 
 const dead = new Promise((resolve) => {
@@ -127,7 +134,7 @@ const dead = new Promise((resolve) => {
 async function pollReady() {
   for (;;) {
     try {
-      const response = await fetch(url, { signal: AbortSignal.timeout(POLL_TIMEOUT_MS) })
+      const response = await fetch(targetUrl, { signal: AbortSignal.timeout(POLL_TIMEOUT_MS) })
       const ok = response.status >= 200 && response.status < 400
       try {
         await response.body?.cancel()
@@ -143,27 +150,27 @@ async function pollReady() {
 }
 
 const watchdog = setTimeout(() => {
-  finish(false, `timed out after ${String(READY_TIMEOUT_MS)} ms waiting for ${url} to answer`)
+  finish(false, `timed out after ${String(READY_TIMEOUT_MS)} ms waiting for ${targetUrl} to answer`)
 }, READY_TIMEOUT_MS)
 watchdog.unref()
 
 const ready = await Promise.race([pollReady(), dead])
 if (ready === null) {
-  finish(false, `dsh web exited before serving ${url} (node: ${nodeExe}, bin: ${dshBin})`)
+  finish(false, `dsh web exited before serving ${targetUrl} (node: ${nodeExe}, bin: ${dshBin})`)
 }
 
 let response
 try {
-  response = await fetch(url)
+  response = await fetch(targetUrl)
 } catch (error) {
-  finish(false, `fetch failed for ${url}: ${String(error)}`)
+  finish(false, `fetch failed for ${targetUrl}: ${String(error)}`)
 }
 const body = await response.text()
 if (response.status !== 200) {
-  finish(false, `unexpected status ${String(response.status)} for ${url}`)
+  finish(false, `unexpected status ${String(response.status)} for ${targetUrl}`)
 }
 if (!/<html/i.test(body) && !body.includes('__DSH_BOOT__')) {
-  finish(false, `page served at ${url} does not look like the dsh web UI`)
+  finish(false, `page served at ${targetUrl} does not look like the dsh web UI`)
 }
 const elapsed = Date.now() - startedAt
-finish(true, `smoke ok: ${url} (${String(elapsed)} ms, status 200, ${String(body.length)} bytes)`)
+finish(true, `smoke ok: ${targetUrl} (${String(elapsed)} ms, status 200, ${String(body.length)} bytes)`)
