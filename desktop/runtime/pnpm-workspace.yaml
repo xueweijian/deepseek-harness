@@ -9,10 +9,6 @@ autoInstallPeers: true
 # so pnpm's fresh-release age gate adds no protection here; disable it rather
 # than carry an auto-generated per-package exclusion list.
 minimumReleaseAge: 0
-# Upstream patches node-pty@1.1.0 (spawn-helper resolution for an embedded
-# runtime); pnpm 11 reads patches from this file, not package.json's pnpm field.
-patchedDependencies:
-  node-pty@1.1.0: patches/node-pty@1.1.0.patch
 # Same build-script review decisions as the upstream harness workspace:
 # node-pty (ConPTY/PTY native) and koffi (Windows durability) may build;
 # dsh-subprocess-local's reviewed postinstall restores the executable bit on
