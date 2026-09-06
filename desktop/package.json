@@ -1,7 +1,7 @@
 {
   "name": "dsh-desktop",
   "productName": "DSH Desktop",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "DSH Desktop - Electron shell around the DeepSeek Harness web UI, shipped with its own Node runtime.",
   "homepage": "https://github.com/xueweijian/deepseek-harness",
