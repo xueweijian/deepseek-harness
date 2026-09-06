@@ -48,6 +48,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Start with the [development guide](docs/development.md) and [architecture documentation](docs/architecture.md).
 
+For development conventions and remote CI policy, see [PROJECT_CONVENTIONS.md](PROJECT_CONVENTIONS.md).
+
 For agents, follow [AGENTS.md](AGENTS.md).
 
 ## License

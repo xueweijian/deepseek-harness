@@ -56,6 +56,13 @@ website/     VitePress projection of selected bilingual docs/ sources
 
 Package groups: [packages/README.md](packages/README.md).
 
+## Local Environment Policy (GitHub Actions Only)
+
+**Strict project constraint**: Never install dependencies or download large files locally.
+- Do NOT run `pnpm install`, `npm install`, or other dependency pulling commands locally.
+- Do NOT download large files, binaries, or datasets locally.
+- Rely strictly on GitHub Actions for building, testing, linting, and CI verification. See [PROJECT_CONVENTIONS.md](PROJECT_CONVENTIONS.md).
+
 ## Commands
 
 ```sh

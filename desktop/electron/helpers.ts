@@ -57,3 +57,29 @@ export function escapeHtml(text: string): string {
   const entities: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }
   return text.replace(/[&<>"']/g, (ch) => entities[ch])
 }
+
+/** Allowed permissions for the shell window. Clipboard operations originating
+ * from the trusted loopback sidecar origin are allowed; all other permissions
+ * and origins remain denied. */
+const ALLOWED_PERMISSIONS = new Set([
+  'clipboard-sanitized-write',
+  'clipboard-read',
+  'clipboard-write',
+])
+
+/** Check whether a requested permission should be granted.
+ * Only clipboard permissions originating from the trusted local sidecar origin are permitted.
+ * @param permission - The Chromium permission name requested.
+ * @param origin - The origin making the request.
+ * @param allowedOrigin - The trusted loopback origin of the running sidecar.
+ * @returns true if granted, false otherwise. */
+export function isAllowedPermission(
+  permission: string,
+  origin: string | undefined,
+  allowedOrigin: string | undefined,
+): boolean {
+  if (allowedOrigin === undefined || origin === undefined || origin !== allowedOrigin) {
+    return false
+  }
+  return ALLOWED_PERMISSIONS.has(permission)
+}

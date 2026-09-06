@@ -65,6 +65,8 @@ pnpm dsh web
 
 请先阅读[开发指南](docs/development.md)与[架构文档](docs/architecture.md)。
 
+开发环境约定与远程构建规范见 [PROJECT_CONVENTIONS.md](PROJECT_CONVENTIONS.md)。
+
 面向 agent：请遵循 [AGENTS.md](AGENTS.md)。
 
 ## 许可证

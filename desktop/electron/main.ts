@@ -1,14 +1,14 @@
 /**
  * DSH Desktop main process: single-instance shell window over the dsh web
  * sidecar, with loopback-only navigation, external links in the system
- * browser, blanket permission denial, close-to-tray, dsh:// deep links,
+ * browser, loopback clipboard-only permission gating, close-to-tray, dsh:// deep links,
  * update notifications, and sidecar teardown before quit.
  * @module dsh-desktop/main
  */
 
 import { join } from 'node:path'
 import { app, BrowserWindow, Menu, Notification, session, shell, Tray } from 'electron'
-import { errorPageUrl, findDeepLink } from './helpers'
+import { errorPageUrl, findDeepLink, isAllowedPermission } from './helpers'
 import { startSidecar, stopSidecar, type SidecarFailure } from './sidecar'
 import { installDownloadedUpdate, startUpdater } from './updater'
 
@@ -131,8 +131,18 @@ function createWindow(): void {
     if (/^https?:/i.test(url)) void shell.openExternal(url)
     return { action: 'deny' }
   })
-  session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => {
-    callback(false)
+  session.defaultSession.setPermissionCheckHandler((_webContents, permission, requestingOrigin) => {
+    return isAllowedPermission(permission, requestingOrigin, allowedOrigin)
+  })
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    const requestingUrl = details?.requestingUrl ?? webContents?.getURL()
+    let origin: string | undefined
+    try {
+      origin = requestingUrl ? new URL(requestingUrl).origin : undefined
+    } catch {
+      origin = undefined
+    }
+    callback(isAllowedPermission(permission, origin, allowedOrigin))
   })
 }
 

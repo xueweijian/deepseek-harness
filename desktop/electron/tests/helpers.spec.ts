@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { errorPageUrl, escapeHtml, findDeepLink } from '../helpers.ts'
+import { errorPageUrl, escapeHtml, findDeepLink, isAllowedPermission } from '../helpers.ts'
 import type { SidecarFailure } from '../sidecar.ts'
 
 const failure = (overrides: Partial<SidecarFailure> = {}): SidecarFailure => ({
@@ -65,3 +65,36 @@ describe('escapeHtml', () => {
     expect(escapeHtml('plain 纯文本')).toBe('plain 纯文本')
   })
 })
+
+describe('isAllowedPermission', () => {
+  const allowedOrigin = 'http://127.0.0.1:3080'
+
+  it('grants clipboard write and read permissions when origin matches allowedOrigin', () => {
+    expect(isAllowedPermission('clipboard-sanitized-write', allowedOrigin, allowedOrigin)).toBe(true)
+    expect(isAllowedPermission('clipboard-read', allowedOrigin, allowedOrigin)).toBe(true)
+    expect(isAllowedPermission('clipboard-write', allowedOrigin, allowedOrigin)).toBe(true)
+  })
+
+  it('denies non-clipboard permissions even when origin matches allowedOrigin', () => {
+    expect(isAllowedPermission('media', allowedOrigin, allowedOrigin)).toBe(false)
+    expect(isAllowedPermission('camera', allowedOrigin, allowedOrigin)).toBe(false)
+    expect(isAllowedPermission('microphone', allowedOrigin, allowedOrigin)).toBe(false)
+    expect(isAllowedPermission('geolocation', allowedOrigin, allowedOrigin)).toBe(false)
+    expect(isAllowedPermission('notifications', allowedOrigin, allowedOrigin)).toBe(false)
+    expect(isAllowedPermission('midi', allowedOrigin, allowedOrigin)).toBe(false)
+  })
+
+  it('denies clipboard permissions when origin does not match allowedOrigin', () => {
+    expect(isAllowedPermission('clipboard-sanitized-write', 'http://malicious.example.com', allowedOrigin)).toBe(false)
+    expect(isAllowedPermission('clipboard-read', 'http://127.0.0.1:9999', allowedOrigin)).toBe(false)
+  })
+
+  it('denies when allowedOrigin is undefined', () => {
+    expect(isAllowedPermission('clipboard-sanitized-write', allowedOrigin, undefined)).toBe(false)
+  })
+
+  it('denies when requesting origin is undefined', () => {
+    expect(isAllowedPermission('clipboard-sanitized-write', undefined, allowedOrigin)).toBe(false)
+  })
+})
+
